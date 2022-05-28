@@ -1,0 +1,20 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+autofaiss
+importlib_metadata
+torch
+retro-pytorch
+transformers
+
+datasets
+faiss-cpu
+matplotlib
+nltk
+numpy
+pandas
+pyserini
+pytorch-lightning
+rouge_score
+sentencepiece
+tqdm
+transformers
+unidecode
