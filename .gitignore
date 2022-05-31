@@ -1,4 +1,5 @@
-data/arxiv/documents
+checkpoints/
+data/arxiv/dataset
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

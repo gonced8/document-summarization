@@ -2,7 +2,7 @@
 autofaiss
 importlib_metadata
 torch
-retro-pytorch
+git+https://github.com/gonced8/RETRO-pytorch.git
 transformers
 
 datasets
