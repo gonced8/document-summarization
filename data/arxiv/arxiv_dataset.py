@@ -5,6 +5,7 @@ from pathlib import Path
 
 import arxiv
 from autofaiss import build_index
+from faiss import read_index
 import pytorch_lightning as pl
 import torch
 from torch.utils.data import DataLoader
@@ -20,13 +21,15 @@ class ArxivDataset(pl.LightningDataModule):
         self.data_dir = "data/arxiv/dataset"
         self.tokenize = model.tokenize
         self.tokenizer = model.tokenizer
-        self.knn_encoder = model.knn_encoder
+        if model.hparams.retrieval:
+            self.knn_encoder = model.knn_encoder
         self.collate_fn = model.collate_fn
         self.num_workers = model.hparams.num_workers
         self.batch_size = model.hparams.batch_size
         self.test_batch_size = model.hparams.test_batch_size
         self.chunk_size = model.hparams.chunk_size
         self.n_neighbors = model.hparams.n_neighbors
+        self.retrieval = model.hparams.retrieval
 
     def prepare_data(self):
         # Check if data_dir is a directory
@@ -97,7 +100,12 @@ class ArxivDataset(pl.LightningDataModule):
                         prompt = "<pad>title: " + title + " " + "abstract: "
                         model_input = prompt + abstract
 
-                        chunks = self.get_chunks(article_id, text, model_input, device)
+                        if self.retrieval:
+                            chunks = self.get_chunks(
+                                article_id, text, model_input, device
+                            )
+                        else:
+                            chunks = None
 
                         dataset[mode].append(
                             {
@@ -127,7 +135,7 @@ class ArxivDataset(pl.LightningDataModule):
                 sample["input_ids"] = torch.tensor(
                     self.tokenize(sample["model_input"]), dtype=torch.long
                 )
-                if chunks in sample:
+                if sample.get("chunks", None) is not None:
                     sample["retrieved"] = torch.stack(
                         [
                             torch.stack(
@@ -243,9 +251,15 @@ class ArxivDataset(pl.LightningDataModule):
 
         # Build index
         index_path = os.path.join(self.data_dir, f"index/{article_id}.index")
-        index, index_infos = build_index(
-            neighbor_embeddings, save_on_disk=True, index_path=index_path, verbose=30
-        )
+        if os.path.exists(index_path):
+            index = read_index(index_path)
+        else:
+            index, _ = build_index(
+                neighbor_embeddings,
+                save_on_disk=True,
+                index_path=index_path,
+                verbose=30,
+            )
 
         # Retrieve chunks for model input
         _, indices = index.search(

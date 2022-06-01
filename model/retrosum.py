@@ -28,7 +28,10 @@ class RetroSum(pl.LightningModule):
         self.original_model_name = "t5-base"
 
         # Initialize kNN encoder
-        self.knn_encoder = SentenceTransformer("sentence-transformers/sentence-t5-base")
+        if self.hparams.retrieval:
+            self.knn_encoder = SentenceTransformer(
+                "sentence-transformers/sentence-t5-base"
+            )
 
         # Initialize original model (T5)
         self.config, self.tokenizer, self.model = self.init_retro_from(

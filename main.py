@@ -34,6 +34,7 @@ if __name__ == "__main__":
     parser.add_argument("--n_neighbors", type=int, default=2)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--no_repeat_ngram_size", type=int, default=5)
+    parser.add_argument("--retrieval", action="store_true")
 
     # Data
     parser.add_argument("--data_name", type=str, default="arxiv")

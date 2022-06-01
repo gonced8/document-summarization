@@ -11,6 +11,7 @@ args=(
 	--n_neighbors 2
     --lr 1e-3
     --no_repeat_ngram_size 5
+	--retrieval
 
     # Data
     --data_name arxiv
