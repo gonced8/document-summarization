@@ -30,6 +30,8 @@ if __name__ == "__main__":
     parser.add_argument("--from_checkpoint", type=str, default="")
     parser.add_argument("--max_input_length", type=int, default=512)
     parser.add_argument("--max_output_length", type=int, default=512)
+    parser.add_argument("--chunk_size", type=int, default=64)
+    parser.add_argument("--n_neighbors", type=int, default=2)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--no_repeat_ngram_size", type=int, default=5)
 

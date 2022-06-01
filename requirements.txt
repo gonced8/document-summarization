@@ -1,8 +1,9 @@
 --extra-index-url https://download.pytorch.org/whl/cpu
 autofaiss
 importlib_metadata
-torch
+sentence_transformers
 git+https://github.com/gonced8/RETRO-pytorch.git
+torch
 transformers
 
 datasets

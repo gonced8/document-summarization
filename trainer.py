@@ -28,14 +28,14 @@ def build_trainer(args):
 
         callbacks += [
             ModelCheckpoint(
-                filename="best", monitor=args.monitor, mode="max", save_last=True
+                filename="best", monitor=args.monitor, mode="min", save_last=True
             )
         ]
 
         callbacks += [
             EarlyStopping(
                 monitor=args.monitor,
-                mode="max",
+                mode="min",
                 min_delta=1e-3,
                 patience=10,
                 strict=True,

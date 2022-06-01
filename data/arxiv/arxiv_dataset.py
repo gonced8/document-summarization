@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 
 import arxiv
+from autofaiss import build_index
 import pytorch_lightning as pl
 import torch
 from torch.utils.data import DataLoader
@@ -18,10 +19,14 @@ class ArxivDataset(pl.LightningDataModule):
         super().__init__()
         self.data_dir = "data/arxiv/dataset"
         self.tokenize = model.tokenize
+        self.tokenizer = model.tokenizer
+        self.knn_encoder = model.knn_encoder
         self.collate_fn = model.collate_fn
         self.num_workers = model.hparams.num_workers
         self.batch_size = model.hparams.batch_size
         self.test_batch_size = model.hparams.test_batch_size
+        self.chunk_size = model.hparams.chunk_size
+        self.n_neighbors = model.hparams.n_neighbors
 
     def prepare_data(self):
         # Check if data_dir is a directory
@@ -55,6 +60,9 @@ class ArxivDataset(pl.LightningDataModule):
                 for article in tqdm(arxiv_metadata, desc="Extracting titles")
             }
 
+            # Set device
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+
             # Check if dataset is already processed
             for mode in modes:
                 dataset_filename = dirpath / f"{mode}.txt"
@@ -73,24 +81,31 @@ class ArxivDataset(pl.LightningDataModule):
                         desc=f"Processing {str(dataset_filename)}",
                     ):
                         entry = json.loads(line)
-                        text = " ".join(entry["article_text"])
+
+                        article_id = entry["article_id"]
+                        try:
+                            title = arxiv_title[entry["article_id"]]
+                        except KeyError:
+                            continue
                         abstract = (
                             " ".join(entry["abstract_text"])
                             .replace("<S> ", "")
                             .replace(" </S>", "")
                         )
-                        # title = query_title_from_id(entry["article_id"])
-                        try:
-                            title = arxiv_title[entry["article_id"]]
-                        except KeyError:
-                            continue
+                        text = " ".join(entry["article_text"])
 
-                        model_input = (
-                            "<pad>title: " + title + " " + "abstract:" + abstract
-                        )
+                        prompt = "<pad>title: " + title + " " + "abstract: "
+                        model_input = prompt + abstract
+
+                        chunks = self.get_chunks(article_id, text, model_input, device)
 
                         dataset[mode].append(
-                            {"id": entry["article_id"], "model_input": model_input}
+                            {
+                                "id": entry["article_id"],
+                                "prompt": prompt,
+                                "model_input": model_input,
+                                "chunks": chunks,
+                            }
                         )
 
                         N -= 1
@@ -104,9 +119,28 @@ class ArxivDataset(pl.LightningDataModule):
         # Tokenize
         for mode, dataset_split in dataset.items():
             for sample in dataset_split:
+                sample["prompt_ids"] = torch.tensor(
+                    self.tokenize(sample["prompt"]), dtype=torch.long
+                )[
+                    :-1
+                ]  # ignore eos_token
                 sample["input_ids"] = torch.tensor(
                     self.tokenize(sample["model_input"]), dtype=torch.long
                 )
+                if chunks in sample:
+                    sample["retrieved"] = torch.stack(
+                        [
+                            torch.stack(
+                                [
+                                    torch.tensor(self.tokenize(chunk), dtype=torch.long)
+                                    for chunk in neighbors
+                                ]
+                            )
+                            for neighbors in sample["chunks"]
+                        ]
+                    )
+                    print(sample["retrieved"].shape)
+                    input()
 
         self.dataset = dataset
 
@@ -165,6 +199,64 @@ class ArxivDataset(pl.LightningDataModule):
 
     def __str__(self):
         return str(self.dataset)
+
+    def get_chunks(self, article_id, text, model_input, device=None):
+        # Make chunks from text
+        text_tokenized = torch.tensor(
+            self.tokenize(text, truncation=False),
+            dtype=torch.long,
+        )
+        length = len(text_tokenized)
+        pad = (self.chunk_size - length % self.chunk_size) % self.chunk_size
+
+        text_tokenized = torch.nn.functional.pad(
+            text_tokenized, (0, pad), value=self.tokenizer.pad_token_id
+        )
+        text_tokenized = text_tokenized.view(-1, self.chunk_size)
+
+        neighbor_chunks = self.tokenizer.batch_decode(
+            text_tokenized, skip_special_tokens=True, clean_up_tokenization_spaces=True
+        )
+
+        neighbor_embeddings = self.knn_encoder.encode(
+            neighbor_chunks[:-1], device=device
+        )  # do not include last chunk because we need pairs of chunks
+
+        # Make chunks from model_input
+        input_tokenized = torch.tensor(
+            self.tokenize(model_input),
+            dtype=torch.long,
+        )
+        length = len(input_tokenized)
+        pad = (self.chunk_size - length % self.chunk_size) % self.chunk_size
+
+        input_tokenized = torch.nn.functional.pad(
+            input_tokenized, (0, pad), value=self.tokenizer.pad_token_id
+        )
+        input_tokenized = input_tokenized.view(-1, self.chunk_size)
+
+        input_chunks = self.tokenizer.batch_decode(
+            input_tokenized, skip_special_tokens=True, clean_up_tokenization_spaces=True
+        )
+
+        input_embeddings = self.knn_encoder.encode(input_chunks, device=device)
+
+        # Build index
+        index_path = os.path.join(self.data_dir, f"index/{article_id}.index")
+        index, index_infos = build_index(
+            neighbor_embeddings, save_on_disk=True, index_path=index_path, verbose=30
+        )
+
+        # Retrieve chunks for model input
+        _, indices = index.search(
+            input_embeddings,
+            k=self.n_neighbors,
+        )  # fetch 2 neighbors, first indices should be self
+
+        return [
+            [" ".join(neighbor_chunks[idx : idx + 1]) for idx in neighbors]
+            for i, neighbors in enumerate(indices)
+        ]
 
 
 def load_json(filename):

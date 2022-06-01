@@ -55,6 +55,12 @@ class DecoderCollateFn:
         )
         """
 
+        batch["prompt_ids"] = torch.nn.utils.rnn.pad_sequence(
+            batch["prompt_ids"],
+            batch_first=True,
+            padding_value=self.pad_token_id,
+        )
+
         batch["input_ids"] = torch.nn.utils.rnn.pad_sequence(
             batch["input_ids"],
             batch_first=True,

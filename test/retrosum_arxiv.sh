@@ -5,6 +5,7 @@ DATASET_PATH="data/arxiv"
 args=(
     #Model
     --model_name retrosum
+	--from_checkpoint checkpoints/retrosum_arxiv/version_1/checkpoints/best.ckpt
     --max_input_length 512
     --max_output_length 512
 	--chunk_size 64
@@ -14,19 +15,17 @@ args=(
 
     # Data
     --data_name arxiv
-    --train_path $DATASET_PATH/train.prot5.pickle
-    --val_path $DATASET_PATH/val.prot5.pickle
-    --test_path $DATASET_PATH/test.prot5.pickle
     --batch_size 16
-    --test_batch_size 16
+    --test_batch_size 1
     --num_workers 8
 
     # Trainer
-    --mode train
+    --mode test
     --max_epochs 20
     --accumulate_grad_batches 4
-    --val_check_interval 1.
+    --val_check_interval 0.5
     --monitor val_loss
+	--results_filename "$(basename $0 .sh)_new"
     #--fast_dev_run
 )
 
