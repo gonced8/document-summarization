@@ -56,19 +56,23 @@ class RetroSum(pl.LightningModule):
             self.freeze_params(d.embed_positions)
             self.freeze_params(d.embed_tokens)
 
-    def forward(self, input_ids, return_loss=False):
+    def forward(self, input_ids, retrieved=None, return_loss=False):
         output = self.model(seq=input_ids, retrieved=None, return_loss=return_loss)
         return output
 
     def training_step(self, batch, batch_idx):
-        output = self.forward(batch["input_ids"], return_loss=True)
+        output = self.forward(
+            batch["input_ids"], batch.get("retrieved", None), return_loss=True
+        )
         loss = output
 
         self.log("train_loss", loss, batch_size=len(batch["input_ids"]))
         return loss
 
     def validation_step(self, batch, batch_idx):
-        output = self.forward(batch["input_ids"], return_loss=True)
+        output = self.forward(
+            batch["input_ids"], batch.get("retrieved", None), return_loss=True
+        )
         loss = output
 
         self.log("val_loss", loss, prog_bar=True, batch_size=len(batch["input_ids"]))
@@ -89,6 +93,8 @@ class RetroSum(pl.LightningModule):
 
         predictions = self.generate(
             batch["prompt_ids"],
+            batch["id"],
+            self.hparams.retrieval,
         )
 
         print("reference", references[0], "", sep="\n")
@@ -153,9 +159,18 @@ class RetroSum(pl.LightningModule):
 
         return score
 
+    def retrieve_neighbors(self, article_ids, data_dir="data/arxiv/dataset"):
+        indices = {
+            article_id: faiss.read_index(f"data/arxiv/dataset/{article_id}.index")
+            for article_id in article_ids
+        }
+
+        # retrieved = [index.search(input_embeddings, k=self.hparams.n_neighbors)[1] for index, input
+
     def generate_retro(
         self,
         start=None,
+        article_ids=None,
         retrieval=False,
         filter_fn=top_k,
         filter_thres=0.9,
@@ -250,9 +265,11 @@ class RetroSum(pl.LightningModule):
 
         return out
 
-    def generate(self, input_ids, *args, **kargs):
+    def generate(self, input_ids, article_ids, retrieval, *args, **kargs):
         output = self.generate_retro(
             input_ids,
+            article_ids,
+            retrieval,
             *args,
             **kargs,
         )

@@ -67,6 +67,13 @@ class DecoderCollateFn:
             padding_value=self.pad_token_id,
         )
 
+        if "retrieved" in batch:
+            batch["retrieved"] = torch.nn.utils.rnn.pad_sequence(
+                batch["retrieved"],
+                batch_first=True,
+                padding_value=self.pad_token_id,
+            )
+
         """
         batch["labels"] = torch.nn.utils.rnn.pad_sequence(
             batch["labels"],

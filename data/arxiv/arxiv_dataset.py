@@ -76,7 +76,7 @@ class ArxivDataset(pl.LightningDataModule):
                 else:
                     dataset[mode] = []
 
-                N = 10000  # TODO: remove this
+                N = 100  # TODO: remove this
                 with open(str(dataset_filename), "r") as f:
                     for line in tqdm(
                         f,
@@ -101,9 +101,11 @@ class ArxivDataset(pl.LightningDataModule):
                         model_input = prompt + abstract
 
                         if self.retrieval:
-                            chunks = self.get_chunks(
+                            chunks, chunks_ids = self.get_chunks(
                                 article_id, text, model_input, device
                             )
+                            if chunks is None:
+                                continue
                         else:
                             chunks = None
 
@@ -113,6 +115,7 @@ class ArxivDataset(pl.LightningDataModule):
                                 "prompt": prompt,
                                 "model_input": model_input,
                                 "chunks": chunks,
+                                "retrieved": chunks_ids,
                             }
                         )
 
@@ -135,20 +138,11 @@ class ArxivDataset(pl.LightningDataModule):
                 sample["input_ids"] = torch.tensor(
                     self.tokenize(sample["model_input"]), dtype=torch.long
                 )
-                if sample.get("chunks", None) is not None:
-                    sample["retrieved"] = torch.stack(
-                        [
-                            torch.stack(
-                                [
-                                    torch.tensor(self.tokenize(chunk), dtype=torch.long)
-                                    for chunk in neighbors
-                                ]
-                            )
-                            for neighbors in sample["chunks"]
-                        ]
+
+                if self.retrieval:
+                    sample["retrieved"] = torch.tensor(
+                        sample["retrieved"], dtype=torch.long
                     )
-                    print(sample["retrieved"].shape)
-                    input()
 
         self.dataset = dataset
 
@@ -226,6 +220,10 @@ class ArxivDataset(pl.LightningDataModule):
             text_tokenized, skip_special_tokens=True, clean_up_tokenization_spaces=True
         )
 
+        # We need at least 3 chunks because (C1: C1+C2 and C2: C2+C3)
+        if len(neighbor_chunks) < self.n_neighbors + 1:
+            return None, None
+
         neighbor_embeddings = self.knn_encoder.encode(
             neighbor_chunks[:-1], device=device
         )  # do not include last chunk because we need pairs of chunks
@@ -267,10 +265,17 @@ class ArxivDataset(pl.LightningDataModule):
             k=self.n_neighbors,
         )  # fetch 2 neighbors, first indices should be self
 
-        return [
-            [" ".join(neighbor_chunks[idx : idx + 1]) for idx in neighbors]
-            for i, neighbors in enumerate(indices)
+        chunks = [
+            [" ".join(neighbor_chunks[idx : idx + 2]) for idx in neighbors]
+            for neighbors in indices
         ]
+
+        chunks_ids = [
+            [text_tokenized[idx : idx + 2].flatten().tolist() for idx in neighbors]
+            for neighbors in indices
+        ]
+
+        return chunks, chunks_ids
 
 
 def load_json(filename):
