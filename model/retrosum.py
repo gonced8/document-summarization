@@ -27,16 +27,12 @@ class RetroSum(pl.LightningModule):
         self.model_name = "RetroSum"
         self.original_model_name = "t5-base"
 
-        # Initialize kNN encoder
-        if self.hparams.retrieval:
-            self.knn_encoder = SentenceTransformer(
-                "sentence-transformers/sentence-t5-base"
-            )
-
         # Initialize original model (T5)
         self.config, self.tokenizer, self.model = self.init_retro_from(
             self.hparams, self.original_model_name
         )
+        # Declare kNN encoder
+        self.knn_encoder = None
 
         self.collate_fn = DecoderCollateFn(self.tokenizer)
         self.f1_em_metric = load_metric("squad_v2")
@@ -57,10 +53,12 @@ class RetroSum(pl.LightningModule):
             self.freeze_params(d.embed_tokens)
 
     def forward(self, input_ids, retrieved=None, return_loss=False):
-        output = self.model(seq=input_ids, retrieved=None, return_loss=return_loss)
+        output = self.model(seq=input_ids, retrieved=retrieved, return_loss=return_loss)
         return output
 
     def training_step(self, batch, batch_idx):
+        # print({k: v.is_cuda for k, v in batch.items() if not isinstance(v, list)})
+
         output = self.forward(
             batch["input_ids"], batch.get("retrieved", None), return_loss=True
         )
@@ -159,18 +157,46 @@ class RetroSum(pl.LightningModule):
 
         return score
 
-    def retrieve_neighbors(self, article_ids, data_dir="data/arxiv/dataset"):
-        indices = {
-            article_id: faiss.read_index(f"data/arxiv/dataset/{article_id}.index")
+    def retrieve_neighbors(
+        self,
+        article_ids,
+        sequences,
+        text_tokenized,
+        data_dir="data/arxiv/dataset",
+    ):
+        indices = [
+            faiss.read_index(f"data/arxiv/dataset/{article_id}.index")
             for article_id in article_ids
-        }
+        ]
 
-        # retrieved = [index.search(input_embeddings, k=self.hparams.n_neighbors)[1] for index, input
+        if self.knn_encoder is None:
+            self.knn_encoder = SentenceTransformer(
+                "sentence-transformers/sentence-t5-base"
+            )
+
+        print(self.device)
+        input_embeddings = self.knn_encoder.encode(sequences, device=self.device)
+
+        retrieved = []
+
+        for index, embeddings, tokenized in zip(
+            indices, input_embeddings, text_tokenized
+        ):
+            # Retrieve chunks for model input
+            _, indices = index.search(
+                embeddings,
+                k=self.hparams.n_neighbors,
+            )  # fetch 2 neighbors, first indices should be self
+
+            retrieved.append([tokenized[idx] + tokenized[idx + 1] for idx in indices])
+
+        return torch.stack(retrieved, dim=0)
 
     def generate_retro(
         self,
         start=None,
         article_ids=None,
+        text_tokenized=None,
         retrieval=False,
         filter_fn=top_k,
         filter_thres=0.9,
@@ -208,11 +234,25 @@ class RetroSum(pl.LightningModule):
         if retrieval and start_seq_len >= chunk_size:
             seq_index = (start_seq_len // chunk_size) * chunk_size
             past_seq_chunks = rearrange(
-                start[:, :seq_index], "b (n c) -> (b n) c", c=chunk_size
+                start[:, :seq_index], "b (n c) -> b n c", c=chunk_size
             )
 
-            retrieved = self.fetch_knn_chunks_fn(past_seq_chunks)
-            retrieved = rearrange(retrieved, "(b n) k c -> b n k c", b=b)
+            article_ids_repeated = [
+                a_id
+                for a_id in article_ids
+                for _ in range(article_ids, seq_index // chunk_size)
+            ]
+
+            retrieved = None
+            for i in range(seq_index // chunk_size):
+                knn_chunks = self.retrieve_neighbors(
+                    article_ids,
+                    past_seq_chunks[:, i, :],
+                    text_tokenized,
+                )
+                knn_chunks = rearrange(knn_chunks, "b k r -> b 1 k r")
+
+                retrieved = safe_cat(retrieved, knn_chunks, dim=1)
         else:
             retrieved = None
 
@@ -223,7 +263,7 @@ class RetroSum(pl.LightningModule):
         # sampling loop
 
         for i in range(start_seq_len - 1, self.hparams.max_output_length):
-            logits = self(out)
+            logits = self(out, retrieved)
             logits = logits[:, i]
 
             logits = filter_fn(logits, thres=filter_thres)
@@ -253,7 +293,7 @@ class RetroSum(pl.LightningModule):
             if retrieval and (curr_seq_len % chunk_size) == 0:
                 last_chunk = rearrange(out, "b (c n) -> b c n", n=chunk_size)[:, -1]
 
-                knn_chunks = self.fetch_knn_chunks_fn(last_chunk)
+                knn_chunks = retrieve_neighbors(article_ids, last_chunk, text_tokenized)
 
                 # concat retrieved knn chunks to all retrieved
                 # to be sent to Retro for chunked cross attention at the next iteration

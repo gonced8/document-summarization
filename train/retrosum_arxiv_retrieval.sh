@@ -18,14 +18,14 @@ args=(
     --train_path $DATASET_PATH/train.prot5.pickle
     --val_path $DATASET_PATH/val.prot5.pickle
     --test_path $DATASET_PATH/test.prot5.pickle
-    --batch_size 16
-    --test_batch_size 4
+    --batch_size 6
+    --test_batch_size 1
     --num_workers 8
 
     # Trainer
     --mode train
-    --max_epochs 20
-    --accumulate_grad_batches 16
+    --max_epochs 30
+    --accumulate_grad_batches 10
     --val_check_interval 1.
     --monitor val_loss
     #--fast_dev_run

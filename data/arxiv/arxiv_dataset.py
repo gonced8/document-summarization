@@ -7,6 +7,7 @@ import arxiv
 from autofaiss import build_index
 from faiss import read_index
 import pytorch_lightning as pl
+from sentence_transformers import SentenceTransformer
 import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -21,8 +22,6 @@ class ArxivDataset(pl.LightningDataModule):
         self.data_dir = "data/arxiv/dataset"
         self.tokenize = model.tokenize
         self.tokenizer = model.tokenizer
-        if model.hparams.retrieval:
-            self.knn_encoder = model.knn_encoder
         self.collate_fn = model.collate_fn
         self.num_workers = model.hparams.num_workers
         self.batch_size = model.hparams.batch_size
@@ -66,6 +65,12 @@ class ArxivDataset(pl.LightningDataModule):
             # Set device
             device = "cuda" if torch.cuda.is_available() else "cpu"
 
+            # Initialize kNN encoder
+            if self.retrieval:
+                knn_encoder = SentenceTransformer(
+                    "sentence-transformers/sentence-t5-base"
+                )
+
             # Check if dataset is already processed
             for mode in modes:
                 dataset_filename = dirpath / f"{mode}.txt"
@@ -76,7 +81,10 @@ class ArxivDataset(pl.LightningDataModule):
                 else:
                     dataset[mode] = []
 
-                N = 100  # TODO: remove this
+                # TODO: remove this
+                N = 5000
+                # N = 1000
+                # N = 100
                 with open(str(dataset_filename), "r") as f:
                     for line in tqdm(
                         f,
@@ -101,10 +109,15 @@ class ArxivDataset(pl.LightningDataModule):
                         model_input = prompt + abstract
 
                         if self.retrieval:
-                            chunks, chunks_ids = self.get_chunks(
-                                article_id, text, model_input, device
-                            )
-                            if chunks is None:
+                            # chunks, chunks_ids = self.get_chunks(
+                            try:
+                                text_tokenized, indices = self.get_chunks(
+                                    article_id, text, model_input, knn_encoder, device
+                                )
+                            except Exception as e:
+                                print(e)
+                                continue
+                            if text_tokenized is None:
                                 continue
                         else:
                             chunks = None
@@ -114,8 +127,10 @@ class ArxivDataset(pl.LightningDataModule):
                                 "id": entry["article_id"],
                                 "prompt": prompt,
                                 "model_input": model_input,
-                                "chunks": chunks,
-                                "retrieved": chunks_ids,
+                                # "chunks": chunks,
+                                # "retrieved": chunks_ids,
+                                "text_tokenized": text_tokenized.tolist(),
+                                "indices": indices.tolist(),
                             }
                         )
 
@@ -131,7 +146,7 @@ class ArxivDataset(pl.LightningDataModule):
         for mode, dataset_split in dataset.items():
             for sample in dataset_split:
                 sample["prompt_ids"] = torch.tensor(
-                    self.tokenize(sample["prompt"]), dtype=torch.long
+                    self.tokenize(sample["prompt"]), dtype=torch.int
                 )[
                     :-1
                 ]  # ignore eos_token
@@ -141,7 +156,15 @@ class ArxivDataset(pl.LightningDataModule):
 
                 if self.retrieval:
                     sample["retrieved"] = torch.tensor(
-                        sample["retrieved"], dtype=torch.long
+                        [
+                            [
+                                sample["text_tokenized"][idx]
+                                + sample["text_tokenized"][idx + 1]
+                                for idx in neighbors
+                            ]
+                            for neighbors in sample["indices"]
+                        ],
+                        dtype=torch.int,
                     )
 
         self.dataset = dataset
@@ -202,7 +225,7 @@ class ArxivDataset(pl.LightningDataModule):
     def __str__(self):
         return str(self.dataset)
 
-    def get_chunks(self, article_id, text, model_input, device=None):
+    def get_chunks(self, article_id, text, model_input, knn_encoder, device=None):
         # Make chunks from text
         text_tokenized = torch.tensor(
             self.tokenize(text, truncation=False),
@@ -216,15 +239,15 @@ class ArxivDataset(pl.LightningDataModule):
         )
         text_tokenized = text_tokenized.view(-1, self.chunk_size)
 
+        # We need at least 3 chunks because (C1: C1+C2 and C2: C2+C3)
+        if text_tokenized.size(0) < self.n_neighbors + 1:
+            return None, None
+
         neighbor_chunks = self.tokenizer.batch_decode(
             text_tokenized, skip_special_tokens=True, clean_up_tokenization_spaces=True
         )
 
-        # We need at least 3 chunks because (C1: C1+C2 and C2: C2+C3)
-        if len(neighbor_chunks) < self.n_neighbors + 1:
-            return None, None
-
-        neighbor_embeddings = self.knn_encoder.encode(
+        neighbor_embeddings = knn_encoder.encode(
             neighbor_chunks[:-1], device=device
         )  # do not include last chunk because we need pairs of chunks
 
@@ -245,10 +268,13 @@ class ArxivDataset(pl.LightningDataModule):
             input_tokenized, skip_special_tokens=True, clean_up_tokenization_spaces=True
         )
 
-        input_embeddings = self.knn_encoder.encode(input_chunks, device=device)
+        input_embeddings = knn_encoder.encode(
+            input_chunks[:-1], device=device
+        )  # do not include last chunk because last chunk uses retrieval from previous
 
         # Build index
         index_path = os.path.join(self.data_dir, f"index/{article_id}.index")
+        index_infos_path = os.path.join(self.data_dir, f"index/{article_id}_infox.json")
         if os.path.exists(index_path):
             index = read_index(index_path)
         else:
@@ -256,6 +282,7 @@ class ArxivDataset(pl.LightningDataModule):
                 neighbor_embeddings,
                 save_on_disk=True,
                 index_path=index_path,
+                index_infos_path=index_infos_path,
                 verbose=30,
             )
 
@@ -265,6 +292,7 @@ class ArxivDataset(pl.LightningDataModule):
             k=self.n_neighbors,
         )  # fetch 2 neighbors, first indices should be self
 
+        """
         chunks = [
             [" ".join(neighbor_chunks[idx : idx + 2]) for idx in neighbors]
             for neighbors in indices
@@ -274,8 +302,9 @@ class ArxivDataset(pl.LightningDataModule):
             [text_tokenized[idx : idx + 2].flatten().tolist() for idx in neighbors]
             for neighbors in indices
         ]
+        """
 
-        return chunks, chunks_ids
+        return text_tokenized, indices
 
 
 def load_json(filename):

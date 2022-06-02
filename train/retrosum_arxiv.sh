@@ -23,7 +23,7 @@ args=(
 
     # Trainer
     --mode train
-    --max_epochs 20
+    --max_epochs 30
     --accumulate_grad_batches 4
     --val_check_interval 1.
     --monitor val_loss
