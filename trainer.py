@@ -37,7 +37,7 @@ def build_trainer(args):
                 monitor=args.monitor,
                 mode="min",
                 min_delta=1e-3,
-                patience=10,
+                patience=5,
                 strict=True,
             )
         ]

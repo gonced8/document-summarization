@@ -26,7 +26,7 @@ args=(
     --accumulate_grad_batches 10
     --val_check_interval 0.5
     --monitor val_loss
-	--results_filename "$(basename $0 .sh)_new"
+	--results_filename "$(basename $0 .sh)"
     #--fast_dev_run
 )
 

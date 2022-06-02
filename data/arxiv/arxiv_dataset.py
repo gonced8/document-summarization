@@ -1,4 +1,4 @@
-import pickle
+from functools import partial
 import json
 import os
 from pathlib import Path
@@ -82,7 +82,7 @@ class ArxivDataset(pl.LightningDataModule):
                     dataset[mode] = []
 
                 # TODO: remove this
-                N = 5000
+                # N = 5000
                 # N = 1000
                 # N = 100
                 with open(str(dataset_filename), "r") as f:
@@ -94,15 +94,8 @@ class ArxivDataset(pl.LightningDataModule):
                         entry = json.loads(line)
 
                         article_id = entry["article_id"]
-                        try:
-                            title = arxiv_title[entry["article_id"]]
-                        except KeyError:
-                            continue
-                        abstract = (
-                            " ".join(entry["abstract_text"])
-                            .replace("<S> ", "")
-                            .replace(" </S>", "")
-                        )
+                        title = entry["title"]
+                        abstract = entry["abstract"]
                         text = " ".join(entry["article_text"])
 
                         prompt = "<pad>title: " + title + " " + "abstract: "
@@ -124,7 +117,7 @@ class ArxivDataset(pl.LightningDataModule):
 
                         dataset[mode].append(
                             {
-                                "id": entry["article_id"],
+                                "id": article_id,
                                 "prompt": prompt,
                                 "model_input": model_input,
                                 # "chunks": chunks,
@@ -134,9 +127,9 @@ class ArxivDataset(pl.LightningDataModule):
                             }
                         )
 
-                        N -= 1
-                        if N == 0:
-                            break
+                        # N -= 1
+                        # if N == 0:
+                        #    break
 
                 # Save processed dataset to JSON files
                 output_filename = dirpath / f"arxiv_{mode}.json"
@@ -167,6 +160,9 @@ class ArxivDataset(pl.LightningDataModule):
                         dtype=torch.int,
                     )
 
+                if self.retrieval and mode == "test":
+                    sample["text_tokenized"] = torch.tensor(sample["text_tokenized"])
+
         self.dataset = dataset
 
     def save_data(self, N=None, output_path="./", append=None, protocol=None):
@@ -189,6 +185,7 @@ class ArxivDataset(pl.LightningDataModule):
                 else:
                     pickle.dump(self.dataset[mode][:N], handle)
 
+    """
     def train_dataloader(self):
         assert len(self.dataset["train"]) > 0
         return DataLoader(
@@ -210,6 +207,7 @@ class ArxivDataset(pl.LightningDataModule):
             shuffle=False,
             pin_memory=bool(torch.cuda.device_count()),
         )
+    """
 
     def test_dataloader(self):
         assert len(self.dataset["test"]) > 0
@@ -217,7 +215,7 @@ class ArxivDataset(pl.LightningDataModule):
             CustomDataset(self.dataset["test"]),
             batch_size=self.test_batch_size,
             num_workers=self.num_workers,
-            collate_fn=self.collate_fn,
+            collate_fn=partial(self.collate_fn, test=True),
             shuffle=False,
             pin_memory=bool(torch.cuda.device_count()),
         )
@@ -360,4 +358,5 @@ class CustomDataset(torch.utils.data.Dataset):
         """
 
     def __len__(self):
+        # return 200
         return len(self.dataset)

@@ -1,9 +1,11 @@
 import json
 import os
 
-from einops import rearrange
 from datasets import load_metric
+from einops import rearrange
+import faiss
 import logging
+import numpy as np
 import pytorch_lightning as pl
 from retro_pytorch import RETRO
 from retro_pytorch.retro_pytorch import RMSNorm
@@ -92,10 +94,11 @@ class RetroSum(pl.LightningModule):
         predictions = self.generate(
             batch["prompt_ids"],
             batch["id"],
+            batch["text_tokenized"],
             self.hparams.retrieval,
         )
 
-        print("reference", references[0], "", sep="\n")
+        # print("reference", references[0], "", sep="\n")
         print("prediction", predictions[0], "", sep="\n")
 
         # Compute metrics and prepare results output
@@ -165,7 +168,7 @@ class RetroSum(pl.LightningModule):
         data_dir="data/arxiv/dataset",
     ):
         indices = [
-            faiss.read_index(f"data/arxiv/dataset/{article_id}.index")
+            faiss.read_index(f"data/arxiv/dataset/index/{article_id}.index")
             for article_id in article_ids
         ]
 
@@ -174,8 +177,10 @@ class RetroSum(pl.LightningModule):
                 "sentence-transformers/sentence-t5-base"
             )
 
-        print(self.device)
-        input_embeddings = self.knn_encoder.encode(sequences, device=self.device)
+        inputs = self.tokenizer.batch_decode(
+            sequences, skip_special_tokens=True, clean_up_tokenization_spaces=True
+        )
+        input_embeddings = self.knn_encoder.encode(inputs, device=self.device)
 
         retrieved = []
 
@@ -184,11 +189,15 @@ class RetroSum(pl.LightningModule):
         ):
             # Retrieve chunks for model input
             _, indices = index.search(
-                embeddings,
+                embeddings[np.newaxis, ...],
                 k=self.hparams.n_neighbors,
             )  # fetch 2 neighbors, first indices should be self
 
-            retrieved.append([tokenized[idx] + tokenized[idx + 1] for idx in indices])
+            retrieved.append(
+                torch.stack(
+                    [tokenized[idx : idx + 2].flatten() for idx in indices.squeeze(0)]
+                )
+            )
 
         return torch.stack(retrieved, dim=0)
 
@@ -208,6 +217,9 @@ class RetroSum(pl.LightningModule):
         }, "filter function must be either top-k or nucleus"
 
         # if not prime tokens given, assume sampling from SOS token with batch size of 1
+
+        if not retrieval:
+            print("generate_retro", "not using retrieval")
 
         # Constants
         SOS_ID = self.tokenizer.pad_token_id
@@ -293,7 +305,9 @@ class RetroSum(pl.LightningModule):
             if retrieval and (curr_seq_len % chunk_size) == 0:
                 last_chunk = rearrange(out, "b (c n) -> b c n", n=chunk_size)[:, -1]
 
-                knn_chunks = retrieve_neighbors(article_ids, last_chunk, text_tokenized)
+                knn_chunks = self.retrieve_neighbors(
+                    article_ids, last_chunk, text_tokenized
+                )
 
                 # concat retrieved knn chunks to all retrieved
                 # to be sent to Retro for chunked cross attention at the next iteration
@@ -301,14 +315,20 @@ class RetroSum(pl.LightningModule):
                 knn_chunks = rearrange(knn_chunks, "b k r -> b 1 k r")
                 retrieved = safe_cat(retrieved, knn_chunks, dim=1)
 
-                print(f"retrieved at {curr_seq_len} / {self.max_seq_len}")
+                # print(f"retrieved at {curr_seq_len} / {self.hparams.max_output_length}")
 
         return out
 
-    def generate(self, input_ids, article_ids, retrieval, *args, **kargs):
+    def generate(
+        self, input_ids, article_ids, text_tokenized, retrieval, *args, **kargs
+    ):
+        if not retrieval:
+            print("generate", "not using retrieval")
+
         output = self.generate_retro(
             input_ids,
             article_ids,
+            text_tokenized,
             retrieval,
             *args,
             **kargs,

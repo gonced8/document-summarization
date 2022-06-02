@@ -38,7 +38,7 @@ class DecoderCollateFn:
     def __init__(self, tokenizer):
         self.pad_token_id = tokenizer.eos_token_id
 
-    def __call__(self, samples):
+    def __call__(self, samples, test=False):
         # Transpose batch
         batch = {k: [sample[k] for sample in samples] for k in samples[0]}
 
@@ -67,9 +67,15 @@ class DecoderCollateFn:
             padding_value=self.pad_token_id,
         )
 
-        if "retrieved" in batch:
+        if test and "retrieved" in batch and "text_tokenized" in batch:
             batch["retrieved"] = torch.nn.utils.rnn.pad_sequence(
                 batch["retrieved"],
+                batch_first=True,
+                padding_value=self.pad_token_id,
+            )
+
+            batch["text_tokenized"] = torch.nn.utils.rnn.pad_sequence(
+                batch["text_tokenized"],
                 batch_first=True,
                 padding_value=self.pad_token_id,
             )
