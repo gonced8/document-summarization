@@ -39,7 +39,7 @@ class ArxivDataset(pl.LightningDataModule):
 
         # Check if dataset is already processed
         dataset = {}
-        for mode in modes:
+        for mode in tqdm(modes, desc="Loading datasets..."):
             dataset_filename = dirpath / f"arxiv_{mode}.json"
 
             # If dataset file exists
@@ -82,6 +82,7 @@ class ArxivDataset(pl.LightningDataModule):
                     dataset[mode] = []
 
                 # TODO: remove this
+                N = 50000
                 # N = 5000
                 # N = 1000
                 # N = 100
@@ -94,15 +95,21 @@ class ArxivDataset(pl.LightningDataModule):
                         entry = json.loads(line)
 
                         article_id = entry["article_id"]
-                        title = entry["title"]
-                        abstract = entry["abstract"]
+                        try:
+                            title = arxiv_title[entry["article_id"]]
+                        except KeyError:
+                            continue
+                        abstract = (
+                            " ".join(entry["abstract_text"])
+                            .replace("<S> ", "")
+                            .replace(" </S>", "")
+                        )
                         text = " ".join(entry["article_text"])
 
                         prompt = "<pad>title: " + title + " " + "abstract: "
                         model_input = prompt + abstract
 
                         if self.retrieval:
-                            # chunks, chunks_ids = self.get_chunks(
                             try:
                                 text_tokenized, indices = self.get_chunks(
                                     article_id, text, model_input, knn_encoder, device
@@ -127,9 +134,9 @@ class ArxivDataset(pl.LightningDataModule):
                             }
                         )
 
-                        # N -= 1
-                        # if N == 0:
-                        #    break
+                        N -= 1
+                        if N == 0:
+                            break
 
                 # Save processed dataset to JSON files
                 output_filename = dirpath / f"arxiv_{mode}.json"
@@ -137,7 +144,7 @@ class ArxivDataset(pl.LightningDataModule):
 
         # Tokenize
         for mode, dataset_split in dataset.items():
-            for sample in dataset_split:
+            for sample in tqdm(dataset_split, desc=f"Tokenizing {mode} dataset..."):
                 sample["prompt_ids"] = torch.tensor(
                     self.tokenize(sample["prompt"]), dtype=torch.int
                 )[
@@ -185,7 +192,6 @@ class ArxivDataset(pl.LightningDataModule):
                 else:
                     pickle.dump(self.dataset[mode][:N], handle)
 
-    """
     def train_dataloader(self):
         assert len(self.dataset["train"]) > 0
         return DataLoader(
@@ -207,7 +213,6 @@ class ArxivDataset(pl.LightningDataModule):
             shuffle=False,
             pin_memory=bool(torch.cuda.device_count()),
         )
-    """
 
     def test_dataloader(self):
         assert len(self.dataset["test"]) > 0
@@ -358,5 +363,5 @@ class CustomDataset(torch.utils.data.Dataset):
         """
 
     def __len__(self):
-        # return 200
+        # return 500
         return len(self.dataset)

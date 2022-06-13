@@ -9,7 +9,7 @@ args=(
     --max_output_length 512
 	--chunk_size 64
 	--n_neighbors 2
-    --lr 1e-3
+    --lr 1e-4
     --no_repeat_ngram_size 5
 	--retrieval
 

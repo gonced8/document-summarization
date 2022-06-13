@@ -98,7 +98,7 @@ class RetroSum(pl.LightningModule):
             self.hparams.retrieval,
         )
 
-        # print("reference", references[0], "", sep="\n")
+        print("reference", references[0], "", sep="\n")
         print("prediction", predictions[0], "", sep="\n")
 
         # Compute metrics and prepare results output

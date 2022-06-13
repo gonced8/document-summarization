@@ -5,10 +5,10 @@ DATASET_PATH="data/arxiv"
 args=(
     #Model
     --model_name retrosum
-	--from_checkpoint checkpoints/retrosum_arxiv/version_24/checkpoints/best.ckpt
+	--from_checkpoint checkpoints/retrosum_arxiv/version_28/checkpoints/best.ckpt
     --max_input_length 512
     --max_output_length 512
-	--chunk_size 64
+	--chunk_size 32
 	--n_neighbors 2
     --lr 1e-3
     --no_repeat_ngram_size 5
@@ -26,7 +26,7 @@ args=(
     --accumulate_grad_batches 10
     --val_check_interval 0.5
     --monitor val_loss
-	#--results_filename "$(basename $0 .sh)"
+	--results_filename "$(basename $0 .sh)_32"
     #--fast_dev_run
 )
 
